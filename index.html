@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>EPHEMERIS — Live Sky Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,500&family=JetBrains+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --void:#05060f;
+    --void-2:#0a0d1f;
+    --violet:#7b5bff;
+    --violet-dim:#4a3a99;
+    --cyan:#4fe3d4;
+    --gold:#f5c56b;
+    --ember:#ff7a59;
+    --text:#e9edfb;
+    --text-dim:#8b93b8;
+    --line:rgba(233,237,251,0.12);
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{
+    margin:0; padding:0; width:100%; height:100%; overflow:hidden;
+    background:var(--void); color:var(--text);
+    font-family:'JetBrains Mono',monospace;
+    -webkit-user-select:none; user-select:none;
+    overscroll-behavior:none;
+  }
+  .serif{font-family:'Cormorant Garamond',serif;}
+
+  #fallback-sky{
+    position:fixed; inset:0; z-index:0;
+    background:
+      radial-gradient(ellipse at 50% 15%, rgba(123,91,255,0.12), transparent 55%),
+      radial-gradient(ellipse at 50% 130%, rgba(79,227,212,0.10), transparent 60%),
+      linear-gradient(180deg, #05060f 0%, #090c1d 45%, #0d1226 100%);
+  }
+  #gl-canvas{ position:fixed; inset:0; z-index:1; width:100%; height:100%; display:block; }
+  #vignette{
+    position:fixed; inset:0; z-index:2; pointer-events:none;
+    background:radial-gradient(ellipse at center, transparent 45%, rgba(0,0,0,0.55) 100%);
+  }
+
+  /* ---------- HUD ---------- */
+  #hud{ position:fixed; inset:0; z-index:5; pointer-events:none; }
+  #hud > *{ pointer-events:auto; }
+
+  .hud-strip{
+    position:absolute; left:0; right:0;
+    display:flex; align-items:center; justify-content:space-between;
+    padding:calc(env(safe-area-inset-top,0px) + 14px) 16px 10px 16px;
+    font-size:11px; letter-spacing:0.04em; color:var(--text-dim);
+    background:linear-gradient(180deg, rgba(5,6,15,0.75), transparent);
+  }
+  .hud-strip .grp{ display:flex; flex-direction:column; gap:2px; }
+  .hud-strip .val{ color:var(--text); font-size:12.5px; }
+  .hud-strip .lbl{ font-size:9px; letter-spacing:0.12em; color:var(--text-dim); }
+
+  #reticle{
+    position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+    width:64px; height:64px; pointer-events:none;
+  }
+  #reticle svg{ width:100%; height:100%; opacity:0.55; }
+  #reticle .dot{ position:absolute; top:50%; left:50%; width:3px; height:3px; margin:-1.5px;
+    border-radius:50%; background:var(--cyan); box-shadow:0 0 8px var(--cyan); }
+
+  #target-card{
+    position:absolute; top:50%; left:50%; transform:translate(-50%, 26px);
+    margin-top:20px; min-width:150px; text-align:center;
+    padding:10px 16px; border-radius:2px;
+    background:rgba(5,6,15,0.55); border:1px solid var(--line);
+    backdrop-filter:blur(6px);
+    opacity:0; transition:opacity 0.35s ease;
+  }
+  #target-card.show{ opacity:1; }
+  #target-card .name{ font-family:'Cormorant Garamond',serif; font-style:italic; font-size:22px; color:var(--gold); line-height:1.1;}
+  #target-card .meta{ font-size:10px; color:var(--text-dim); margin-top:3px; letter-spacing:0.06em; }
+
+  #zoom-pill{
+    position:absolute; top:calc(env(safe-area-inset-top,0px) + 54px); left:50%; transform:translateX(-50%);
+    z-index:6; opacity:0; pointer-events:none; transition:opacity 0.25s ease;
+  }
+  #zoom-pill.show{ opacity:1; pointer-events:auto; }
+
+  .hud-bottom{
+    position:absolute; left:0; right:0; bottom:0;
+    padding:10px 16px calc(env(safe-area-inset-bottom,0px) + 14px) 16px;
+    background:linear-gradient(0deg, rgba(5,6,15,0.85), transparent);
+  }
+  #compass-strip{ position:relative; height:34px; overflow:hidden; margin-bottom:10px; }
+  #compass-track{ position:absolute; top:0; left:0; height:100%; white-space:nowrap; will-change:transform; }
+  .tick{ display:inline-block; width:60px; text-align:center; font-size:10px; color:var(--text-dim); position:relative; top:8px;}
+  .tick.card{ color:var(--cyan); font-size:12px; letter-spacing:0.1em; }
+  #compass-strip::before, #compass-strip::after{
+    content:''; position:absolute; top:0; bottom:0; width:40px; z-index:2;
+  }
+  #compass-strip::before{ left:0; background:linear-gradient(90deg, var(--void), transparent); }
+  #compass-strip::after{ right:0; background:linear-gradient(270deg, var(--void), transparent); }
+  #compass-needle{ position:absolute; left:50%; top:0; width:1px; height:8px; background:var(--cyan); transform:translateX(-50%); }
+
+  .btnrow{ display:flex; gap:8px; align-items:center; justify-content:space-between; }
+  .pill{
+    font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:0.08em;
+    color:var(--text); background:rgba(233,237,251,0.06); border:1px solid var(--line);
+    padding:8px 12px; border-radius:20px; display:flex; align-items:center; gap:6px;
+    cursor:pointer;
+  }
+  .pill .sw{ width:6px; height:6px; border-radius:50%; background:var(--cyan); box-shadow:0 0 6px var(--cyan); }
+  .pill.off .sw{ background:#555; box-shadow:none; }
+
+  /* ---------- Start overlay ---------- */
+  #start{
+    position:fixed; inset:0; z-index:50; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; text-align:center; padding:40px 28px;
+    background:
+      radial-gradient(circle at 30% 20%, rgba(123,91,255,0.25), transparent 45%),
+      radial-gradient(circle at 75% 75%, rgba(79,227,212,0.15), transparent 40%),
+      var(--void);
+    transition:opacity 0.8s ease, visibility 0.8s;
+  }
+  #start.hide{ opacity:0; visibility:hidden; pointer-events:none; }
+  #start .eyebrow{ font-size:11px; letter-spacing:0.35em; color:var(--cyan); margin-bottom:18px; }
+  #start h1{ font-family:'Cormorant Garamond',serif; font-weight:500; font-size:52px; line-height:1.05;
+    margin:0 0 14px 0; color:var(--text); max-width:480px; }
+  #start h1 em{ color:var(--gold); font-style:italic; }
+  #start p{ font-size:13px; color:var(--text-dim); max-width:360px; line-height:1.7; margin:0 0 34px 0; }
+  #launch{
+    font-family:'JetBrains Mono',monospace; font-size:12px; letter-spacing:0.12em;
+    color:var(--void); background:linear-gradient(135deg, var(--cyan), var(--violet));
+    border:none; padding:16px 34px; border-radius:30px; cursor:pointer;
+    box-shadow:0 0 30px rgba(123,91,255,0.4);
+  }
+  #launch:active{ transform:scale(0.97); }
+  #status-line{ margin-top:22px; font-size:10.5px; color:var(--text-dim); min-height:16px; letter-spacing:0.04em; }
+  #manual-loc{ margin-top:16px; display:none; gap:8px; }
+  #manual-loc input{
+    width:100px; background:rgba(233,237,251,0.06); border:1px solid var(--line); color:var(--text);
+    font-family:'JetBrains Mono',monospace; font-size:11px; padding:8px; border-radius:4px; text-align:center;
+  }
+  #manual-loc button{
+    background:transparent; border:1px solid var(--line); color:var(--text-dim); border-radius:4px;
+    font-family:'JetBrains Mono',monospace; font-size:10px; padding:8px 10px; cursor:pointer;
+  }
+
+  /* ---------- Panel ---------- */
+  #panel{
+    position:fixed; left:0; right:0; bottom:0; z-index:20;
+    background:rgba(8,10,22,0.92); backdrop-filter:blur(14px);
+    border-top:1px solid var(--line);
+    border-radius:18px 18px 0 0;
+    transform:translateY(100%); transition:transform 0.4s cubic-bezier(.16,.8,.3,1);
+    padding:10px 22px calc(env(safe-area-inset-bottom,0px) + 22px) 22px;
+    max-height:60vh; overflow-y:auto;
+  }
+  #panel.open{ transform:translateY(0); }
+  #panel .grabber{ width:36px; height:4px; background:var(--line); border-radius:2px; margin:6px auto 16px auto; }
+  #panel h2{ font-family:'Cormorant Garamond',serif; font-style:italic; font-weight:500; font-size:30px;
+    color:var(--gold); margin:0 0 4px 0; }
+  #panel .sub{ font-size:11px; color:var(--text-dim); margin-bottom:18px; letter-spacing:0.05em; }
+  .datagrid{ display:grid; grid-template-columns:1fr 1fr; gap:14px 20px; }
+  .datagrid .item .lbl{ font-size:9px; letter-spacing:0.12em; color:var(--text-dim); margin-bottom:3px; }
+  .datagrid .item .v{ font-size:15px; color:var(--text); }
+  #close-panel{ position:absolute; top:14px; right:18px; background:none; border:none; color:var(--text-dim);
+    font-size:20px; cursor:pointer; font-family:'JetBrains Mono',monospace; }
+
+  /* ---------- Visible objects list toggle ---------- */
+  #objlist-btn{ position:absolute; top:calc(env(safe-area-inset-top,0px) + 54px); right:14px; z-index:6; }
+  #objlist{
+    position:absolute; top:calc(env(safe-area-inset-top,0px) + 96px); right:14px; z-index:6;
+    background:rgba(8,10,22,0.85); border:1px solid var(--line); border-radius:10px;
+    padding:10px 14px; min-width:150px; backdrop-filter:blur(8px);
+    display:none;
+  }
+  #objlist.show{ display:block; }
+  #objlist .row{ display:flex; justify-content:space-between; gap:14px; font-size:11px; padding:4px 0;
+    border-bottom:1px solid rgba(233,237,251,0.06); cursor:pointer; }
+  #objlist .row:last-child{ border-bottom:none; }
+  #objlist .row .n{ color:var(--text); }
+  #objlist .row .a{ color:var(--text-dim); }
+  #objlist .row.below{ opacity:0.35; }
+
+  /* ---------- Altitude (up/down) gauge ---------- */
+  #alt-gauge{
+    position:absolute; right:10px; top:50%; transform:translateY(-50%);
+    width:30px; height:230px; z-index:6;
+    display:flex; flex-direction:column; align-items:center;
+  }
+  #alt-gauge .track{ position:relative; width:2px; height:100%; background:var(--line); border-radius:2px; }
+  #alt-gauge .tick{ position:absolute; right:6px; width:8px; height:1px; background:var(--text-dim); }
+  #alt-gauge .tick.zero{ background:var(--cyan); width:12px; height:1.5px; }
+  #alt-gauge .tag{ position:absolute; right:16px; font-size:8px; letter-spacing:0.08em; color:var(--text-dim); transform:translateY(-50%); white-space:nowrap; }
+  #alt-gauge .marker{
+    position:absolute; right:-3px; width:0; height:0;
+    border-top:6px solid transparent; border-bottom:6px solid transparent;
+    border-right:9px solid var(--cyan); filter:drop-shadow(0 0 5px var(--cyan));
+    transition:top 0.15s linear;
+  }
+  #alt-gauge .readout{ position:absolute; right:20px; font-size:10px; color:var(--cyan); transform:translateY(-50%); white-space:nowrap; }
+
+  /* ---------- Compass dial (toggleable) ---------- */
+  #compass-toggle{ position:absolute; top:calc(env(safe-area-inset-top,0px) + 54px); left:14px; z-index:6; }
+  #compass-dial{
+    position:absolute; top:calc(env(safe-area-inset-top,0px) + 96px); left:14px; z-index:6;
+    width:132px; height:132px; border-radius:50%;
+    background:rgba(8,10,22,0.7); border:1px solid var(--line); backdrop-filter:blur(6px);
+    display:none;
+  }
+  #compass-dial.show{ display:block; }
+  #compass-dial .face{ position:absolute; inset:0; transition:transform 0.12s linear; }
+  #compass-dial .cdlabel{ position:absolute; left:50%; top:8px; transform:translateX(-50%); font-size:11px; letter-spacing:0.05em; }
+  #compass-dial .cdlabel.n{ color:var(--cyan); font-weight:600; }
+  #compass-dial .cdlabel.e{ top:50%; left:auto; right:8px; transform:translateY(-50%); color:var(--text-dim); font-size:10px; }
+  #compass-dial .cdlabel.s{ top:auto; bottom:8px; left:50%; transform:translateX(-50%); color:var(--text-dim); font-size:10px; }
+  #compass-dial .cdlabel.w{ top:50%; left:8px; right:auto; transform:translateY(-50%); color:var(--text-dim); font-size:10px; }
+  #compass-dial .ring{ position:absolute; inset:6px; border-radius:50%; border:1px solid rgba(233,237,251,0.08); }
+  #compass-dial .dot{
+    position:absolute; width:7px; height:7px; margin:-3.5px; border-radius:50%;
+    background:var(--gold); box-shadow:0 0 6px var(--gold);
+  }
+  #compass-dial .pointer{
+    position:absolute; left:50%; top:2px; width:0; height:0; transform:translateX(-50%);
+    border-left:5px solid transparent; border-right:5px solid transparent; border-bottom:9px solid var(--text);
+    z-index:2;
+  }
+  #compass-dial .cd-center{
+    position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+    text-align:center; pointer-events:none; z-index:1;
+  }
+  #compass-dial .cd-deg{ font-size:22px; color:var(--text); font-weight:500; line-height:1; text-shadow:0 0 10px rgba(79,227,212,0.3); }
+  #compass-dial .cd-dir{ font-size:10px; color:var(--cyan); letter-spacing:0.1em; margin-top:2px; }
+
+  #heading-big{
+    text-align:center; font-size:15px; color:var(--cyan); letter-spacing:0.08em;
+    margin-bottom:2px; text-shadow:0 0 12px rgba(79,227,212,0.35);
+  }
+  #heading-big .dir{ color:var(--text); font-size:11px; margin-left:6px; letter-spacing:0.1em; }
+
+  ::-webkit-scrollbar{ display:none; }
+</style>
+</head>
+<body>
+
+<div id="fallback-sky"></div>
+<canvas id="gl-canvas"></canvas>
+<div id="vignette"></div>
+
+<div id="hud">
+  <div class="hud-strip">
+    <div class="grp">
+      <span class="lbl">LOCATION</span>
+      <span class="val" id="loc-val">— , —</span>
+      <span class="lbl" id="loc-place" style="color:var(--text-dim); font-size:9.5px; margin-top:1px;"></span>
+    </div>
+    <div class="grp" style="text-align:center;">
+      <span class="lbl">LOCAL SIDEREAL TIME</span>
+      <span class="val" id="lst-val">—</span>
+    </div>
+    <div class="grp" style="text-align:right;">
+      <span class="lbl">UTC</span>
+      <span class="val" id="time-val">—</span>
+    </div>
+  </div>
+
+  <div id="reticle">
+    <svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="20" fill="none" stroke="#4fe3d4" stroke-width="0.6"/>
+      <line x1="32" y1="2" x2="32" y2="14" stroke="#4fe3d4" stroke-width="0.6"/>
+      <line x1="32" y1="50" x2="32" y2="62" stroke="#4fe3d4" stroke-width="0.6"/>
+      <line x1="2" y1="32" x2="14" y2="32" stroke="#4fe3d4" stroke-width="0.6"/>
+      <line x1="50" y1="32" x2="62" y2="32" stroke="#4fe3d4" stroke-width="0.6"/></svg>
+    <div class="dot"></div>
+  </div>
+  <div id="target-card"><div class="name" id="target-name">—</div><div class="meta" id="target-meta">—</div></div>
+  <button id="zoom-pill" class="pill">⤢ 1.0×  ·  tap to reset</button>
+
+  <button id="objlist-btn" class="pill">☰ OBJECTS</button>
+  <div id="objlist"></div>
+
+  <button id="compass-toggle" class="pill off">◇ COMPASS OFF</button>
+  <div id="compass-dial">
+    <div class="ring"></div>
+    <div class="face" id="compass-face">
+      <div class="cdlabel n">N</div>
+      <div class="cdlabel e">E</div>
+      <div class="cdlabel s">S</div>
+      <div class="cdlabel w">W</div>
+      <div id="compass-dots"></div>
+    </div>
+    <div class="pointer"></div>
+    <div class="cd-center"><div class="cd-deg" id="compass-deg-center">000°</div><div class="cd-dir" id="compass-dir-center">N</div></div>
+  </div>
+
+  <div id="alt-gauge">
+    <div class="track" id="alt-track"></div>
+    <div class="marker" id="alt-marker"></div>
+    <div class="readout" id="alt-readout">0°</div>
+  </div>
+
+  <div class="hud-bottom">
+    <div id="heading-big">000°<span class="dir">N</span></div>
+    <div id="compass-strip">
+      <div id="compass-needle"></div>
+      <div id="compass-track"></div>
+    </div>
+    <div class="btnrow">
+      <div class="pill off" id="pill-sensor"><span class="sw"></span>SENSORS</div>
+      <div class="pill" id="pill-calibrate">⟲ RECENTER</div>
+    </div>
+  </div>
+</div>
+
+<div id="panel">
+  <button id="close-panel">✕</button>
+  <div class="grabber"></div>
+  <h2 id="p-name">—</h2>
+  <div class="sub" id="p-sub">—</div>
+  <div class="datagrid" id="p-grid"></div>
+</div>
+
+<div id="start">
+  <div class="eyebrow">DIGITAL PLANETARIUM</div>
+  <h1>Point your phone<br>at the <em>sky</em>.</h1>
+  <p>Ephemeris uses your exact location and your phone's orientation sensors to render the real positions of stars, planets, the Moon and Sun — live, as you move.</p>
+  <button id="launch">BEGIN CALIBRATION</button>
+  <div id="status-line">awaiting input</div>
+  <div id="manual-loc">
+    <input id="man-lat" type="text" placeholder="lat">
+    <input id="man-lon" type="text" placeholder="lon">
+    <button id="man-go">USE THIS</button>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module" src="./sky.js"></script>
+</body>
+</html>
